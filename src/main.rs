@@ -38,6 +38,48 @@ use scl_gui_widgets::{
 
 use crate::ncm_utils::get_ncm_install_path;
 
+/// 上游（官方）版本表：按网易云版本给出适配的 BetterNCM 版本与 DLL 下载地址。
+const UPSTREAM_VERSION_TABLE_URL: &str =
+    "https://gitcode.net/qq_21551787/bncm-data-pack2/-/raw/master/betterncm/betterncm3.json";
+
+/// yousj-plus 增强版版本表：同格式（versions/test -> 版本要求 -> version/url_x86/url_x64），
+/// 托管在本 Fork 对应的 chromatic 仓库 yousj-plus 分支，可独立更新、不依赖上游数据包。
+const YOUSJ_VERSION_TABLE_URL: &str =
+    "https://raw.githubusercontent.com/yousj666/chromatic/yousj-plus/installer/betterncm3-yousj.json";
+
+/// 随安装器内置的 MVDownloader 插件包（BetterNCM .plugin 格式），
+/// 源码在 yousj666/chromatic 的 yousj-plus 分支 builtin-plugins/MVDownloader/。
+const MV_DOWNLOADER_PLUGIN: &[u8] = include_bytes!("../assets/MVDownloader.plugin");
+
+fn version_table_url(yousj_source: bool) -> &'static str {
+    if yousj_source {
+        YOUSJ_VERSION_TABLE_URL
+    } else {
+        UPSTREAM_VERSION_TABLE_URL
+    }
+}
+
+/// BetterNCM 数据目录：与本体 dllmain.cpp 一致——
+/// 环境变量 BETTERNCM_PROFILE，否则 C:\betterncm。
+fn betterncm_data_path() -> PathBuf {
+    match env::var("BETTERNCM_PROFILE") {
+        Ok(p) if !p.is_empty() => PathBuf::from(p),
+        _ => PathBuf::from("C:\\betterncm"),
+    }
+}
+
+/// 把内置的 MVDownloader 插件预装到 <数据目录>/plugins/，
+/// 本体启动时 PluginManager 会自动解压加载。
+fn preinstall_mv_downloader_plugin() -> anyhow::Result<()> {
+    let plugins_dir = betterncm_data_path().join("plugins");
+    fs::create_dir_all(&plugins_dir)?;
+    fs::write(
+        plugins_dir.join("MVDownloader.plugin"),
+        MV_DOWNLOADER_PLUGIN,
+    )?;
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum AdaptedVersionResult {
     Version(Version),
@@ -48,6 +90,9 @@ pub enum AdaptedVersionResult {
 struct AppData {
     progress: f64,
     prerelease: bool,
+    /// true = 使用 yousj-plus 增强版源（版本表托管在 yousj666/chromatic），
+    /// false = 上游官方源。安装/重装时增强版源还会预装 MVDownloader 插件。
+    yousj_source: bool,
     #[data(eq)]
     latest_version: Option<AdaptedVersionResult>,
     old_version: bool,
@@ -77,12 +122,11 @@ fn get_adapted_betterncm_version(
     ncm: Option<Ncm>,
     event_sink: ExtEventSink,
     channel: String,
+    table_url: &str,
 ) -> anyhow::Result<(), Box<dyn std::error::Error>> {
     if let Some(ncm) = ncm {
         use serde_json::Value;
-        let releases = tinyget::get(
-            "https://gitcode.net/qq_21551787/bncm-data-pack2/-/raw/master/betterncm/betterncm3.json",
-        )
+        let releases = tinyget::get(table_url)
         .with_header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
         .send()?;
 
@@ -133,6 +177,7 @@ fn main() -> Result<()> {
 
     let mut data = AppData {
         prerelease: false,
+        yousj_source: false,
         progress: 0.,
         latest_version: None,
         old_version: if let Ok(path) = get_ncm_install_path() {
@@ -170,7 +215,12 @@ fn main() -> Result<()> {
     let ncm_version_ = data.ncm.clone();
 
     std::thread::spawn(move || {
-        let _ = get_adapted_betterncm_version(ncm_version_, event_sink, "versions".to_string());
+        let _ = get_adapted_betterncm_version(
+            ncm_version_,
+            event_sink,
+            "versions".to_string(),
+            version_table_url(false),
+        );
     });
 
     launcher
@@ -280,12 +330,40 @@ fn ui_builder() -> impl Widget<AppData> {
                     data.latest_version = None;
                     data.tips_string = "".into();
                     let ncm = data.ncm.clone();
+                    let table_url = version_table_url(data.yousj_source);
                     std::thread::spawn(move || {
-                        let _ = get_adapted_betterncm_version(ncm, sink, channel.to_string());
+                        let _ = get_adapted_betterncm_version(
+                            ncm,
+                            sink,
+                            channel.to_string(),
+                            table_url,
+                        );
                     });
                 });
         })
         .lens(AppData::prerelease);
+
+    let checker_yousj_source = Checkbox::new("增强版源(yousj-plus)")
+        .on_change(|ctx, _old, new, _env| {
+            let sink = ctx.get_external_handle();
+            let table_url = version_table_url(*new);
+            ctx.get_external_handle()
+                .add_idle_callback(move |data: &mut AppData| {
+                    data.latest_version = None;
+                    data.tips_string = "".into();
+                    let ncm = data.ncm.clone();
+                    let channel = if data.prerelease { "test" } else { "versions" };
+                    std::thread::spawn(move || {
+                        let _ = get_adapted_betterncm_version(
+                            ncm,
+                            sink,
+                            channel.to_string(),
+                            table_url,
+                        );
+                    });
+                });
+        })
+        .lens(AppData::yousj_source);
 
     let button_install = Button::new("安装")
         .disabled_if(|data: &AppData, _env: &_| {
@@ -297,6 +375,7 @@ fn ui_builder() -> impl Widget<AppData> {
         .on_click(|ctx, data, _env| {
             let event_sink = ctx.get_external_handle();
             let url: String = data.latest_download_url.as_ref().unwrap().clone();
+            let preinstall_plugin = data.yousj_source;
             std::thread::spawn(move || {
                 fn add_exclude_from_wd() -> anyhow::Result<()> {
                     // Command::new("powershell.exe")
@@ -336,8 +415,18 @@ fn ui_builder() -> impl Widget<AppData> {
                 std::fs::copy("betterncm.dll", get_ncm_install_path()?.join("msimg32.dll"))
                     .unwrap();
 
+                // 增强版源：本体装好后一并预装 MVDownloader 插件
+                let plugin_tip = if preinstall_plugin {
+                    match preinstall_mv_downloader_plugin() {
+                        Ok(()) => " 已预装 MV 下载插件。",
+                        Err(_) => "（MV 下载插件预装失败，可手动把 MVDownloader.plugin 放进数据目录的 plugins 文件夹）",
+                    }
+                } else {
+                    ""
+                };
+
                 event_sink.add_idle_callback(move |data: &mut AppData| {
-                    data.tips_string = "安装成功！".into();
+                    data.tips_string = format!("安装成功！{plugin_tip}").into();
                     data.new_version = if let Ok(path) = get_ncm_install_path() {
                         path.join("msimg32.dll").exists()
                     } else {
@@ -362,6 +451,7 @@ fn ui_builder() -> impl Widget<AppData> {
         .on_click(|ctx, data, _env| {
             let event_sink = ctx.get_external_handle();
             let url: String = data.latest_download_url.as_ref().unwrap().clone();
+            let preinstall_plugin = data.yousj_source;
             std::thread::spawn(move || {
                 let _ = std::fs::remove_file("betterncm.dll");
 
@@ -383,8 +473,18 @@ fn ui_builder() -> impl Widget<AppData> {
                 std::fs::copy("betterncm.dll", get_ncm_install_path()?.join("msimg32.dll"))
                     .unwrap();
 
+                // 增强版源：本体装好后一并预装 MVDownloader 插件
+                let plugin_tip = if preinstall_plugin {
+                    match preinstall_mv_downloader_plugin() {
+                        Ok(()) => " 已预装 MV 下载插件。",
+                        Err(_) => "（MV 下载插件预装失败，可手动把 MVDownloader.plugin 放进数据目录的 plugins 文件夹）",
+                    }
+                } else {
+                    ""
+                };
+
                 event_sink.add_idle_callback(move |data: &mut AppData| {
-                    data.tips_string = "升级/重新安装成功！".into();
+                    data.tips_string = format!("升级/重新安装成功！{plugin_tip}").into();
                     data.new_version = if let Ok(path) = get_ncm_install_path() {
                         path.join("msimg32.dll").exists()
                     } else {
@@ -529,6 +629,7 @@ fn ui_builder() -> impl Widget<AppData> {
                     data.ncm.clone(),
                     ctx.get_external_handle(),
                     if data.prerelease { "test" } else { "versions" }.to_string(),
+                    version_table_url(data.yousj_source),
                 );
             }
         });
@@ -548,7 +649,12 @@ fn ui_builder() -> impl Widget<AppData> {
                 data.tips_string.clone()
             }))
             .with_flex_spacer(1.)
-            .with_child(checker_prerelease)
+            .with_child(
+                Flex::row()
+                    .with_child(checker_prerelease)
+                    .with_spacer(10.)
+                    .with_child(checker_yousj_source),
+            )
             .with_spacer(5.)
             .with_child(
                 Flex::row()
