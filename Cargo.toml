@@ -29,7 +29,6 @@ rfd = "0.12"
 lto = true
 codegen-units = 1
 panic = "immediate-abort"
-panic = "abort"
 opt-level = "z"
 debug = false
 strip = true
