@@ -6,9 +6,10 @@ on:
     - created
     - edited
   push:
-    branches: [ main ]
+    branches: [ main, yousj-plus ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -19,17 +20,17 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     - name: Switch nightly
-      run: 
-        rustup default nightly; rustup target add i686-pc-windows-msvc
+      run:
+        rustup default nightly; rustup target add i686-pc-windows-msvc; rustup component add rust-src
     - name: Build
-      run: 
-        cargo +nightly build --release --verbose -Z build-std=core,alloc,std,panic_abort -Z build-std-features=panic_immediate_abort --target i686-pc-windows-msvc 
+      run:
+        cargo +nightly build --release --verbose -Z build-std=core,alloc,std,panic_abort -Z build-std-features=panic_immediate_abort --target i686-pc-windows-msvc
     - name: Upload Artifact
-      uses: actions/upload-artifact@v3.1.1
+      uses: actions/upload-artifact@v4
       with:
-        name: BetterNCM-Installer
+        name: BetterNCM-Installer-${{ github.ref_name }}
         path: ${{ github.workspace }}/target/i686-pc-windows-msvc/release/betterncm_installer.exe
     - name: Upload to Release Action
       if: ${{ github.event_name == 'release' }}
