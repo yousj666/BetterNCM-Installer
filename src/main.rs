@@ -37,13 +37,15 @@ use scl_gui_widgets::{
 use crate::ncm_utils::get_ncm_install_path;
 
 /// 上游（官方）版本表：按网易云版本给出适配的 BetterNCM 版本与 DLL 下载地址。
-const UPSTREAM_VERSION_TABLE_URL: &str =
-    "https://gitcode.net/qq_21551787/bncm-data-pack2/-/raw/master/betterncm/betterncm3.json";
+/// 自托管镜像（yousj.cc）：原 gitcode 地址对非浏览器请求有反爬拦截、安装器的
+/// tinyget 又是直连不走代理，曾导致「适配版本」一直卡在获取中，故镜像到自有服务器，
+/// 内容与上游保持一致、DLL 地址一并镜像。
+const UPSTREAM_VERSION_TABLE_URL: &str = "https://yousj.cc/betterncm/betterncm3.json";
 
-/// yousj-plus 增强版版本表：同格式（versions/test -> 版本要求 -> version/url_x86/url_x64），
-/// 托管在本 Fork 对应的 chromatic 仓库 yousj-plus 分支，可独立更新、不依赖上游数据包。
-const YOUSJ_VERSION_TABLE_URL: &str =
-    "https://raw.githubusercontent.com/yousj666/chromatic/yousj-plus/installer/betterncm3-yousj.json";
+/// yousj-plus 增强版版本表：同格式（versions/test -> 版本要求 -> version/url_x86/url_x64）。
+/// 同样自托管在 yousj.cc（源文件仍在本 Fork 对应的 chromatic 仓库 yousj-plus 分支
+/// installer/betterncm3-yousj.json，更新后需同步到服务器），不依赖 raw.githubusercontent 直连。
+const YOUSJ_VERSION_TABLE_URL: &str = "https://yousj.cc/betterncm/betterncm3-yousj.json";
 
 /// 随安装器内置的 MVDownloader 插件包（BetterNCM .plugin 格式），
 /// 源码在 yousj666/chromatic 的 yousj-plus 分支 builtin-plugins/MVDownloader/。
